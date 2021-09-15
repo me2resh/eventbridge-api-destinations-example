@@ -1,0 +1,143 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  Eventbridge API Destination example
+  A simple lambda function that gets invoked by API Gateway, and adds user data to dynamo db and send event to
+  eventbridge that invokes API Destinations which sends an email using sendgrid rest API.
+
+
+Transform:
+- AWS::Serverless-2016-10-31
+
+Parameters:
+  CentralBusArn:
+    Description: Arn for central event bus
+    Type: String
+    Default: "arn:aws:events:eu-west-1:0000000000:event-bus/default"
+  SendgridApiKey:
+    Description: SendGrid API Key
+    Type: String
+    Default: "Bearer SendGridSuperSecretApiKey"
+
+Resources:
+
+  putUserFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/handlers/put-user.putUserHandler
+      Runtime: nodejs14.x
+      MemorySize: 128
+      Timeout: 100
+      Description: A simple example includes a HTTP post method to add one item to a DynamoDB table.
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UserTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - events:PutEvents
+              Resource: "*"
+      Environment:
+        Variables:
+          USER_TABLE: !Ref UserTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            Path: /user
+            Method: POST
+
+  UserTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      PrimaryKey:
+        Name: id
+        Type: String
+      ProvisionedThroughput:
+        ReadCapacityUnits: 2
+        WriteCapacityUnits: 2
+
+  SendgridApiDestination:
+    Type: AWS::Events::ApiDestination
+    Properties:
+      ConnectionArn:
+        Fn::GetAtt: [SendgridConnection, Arn]
+      InvocationEndpoint: 'https://api.sendgrid.com/v3/mail/send'
+      HttpMethod: POST
+      InvocationRateLimitPerSecond: 300
+
+  SendgridConnection:
+    Type: AWS::Events::Connection
+    Properties:
+      AuthorizationType: API_KEY
+      Description: 'Sendgrid API Credentials'
+      AuthParameters:
+        ApiKeyAuthParameters:
+          ApiKeyName: Authorization
+          ApiKeyValue: !Ref SendgridApiKey
+
+  ApiDestinationDeliveryRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventBusName: !Ref CentralBusArn
+      EventPattern:
+        source:
+          - "com.users"
+        detail-type:
+          - "UserCreated"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt SendgridApiDestination.Arn
+          Id: SendgridTarget
+          RoleArn: !GetAtt SendgridTargetRole.Arn
+          InputTransformer:
+            InputPathsMap:
+              name: $.detail.name
+              email: $.detail.email
+            InputTemplate: >
+              {
+                "personalizations": [
+                  {
+                    "to": [
+                      {
+                        "email": "hello@example.com"
+                      }
+                    ]
+                  }
+                ],
+                "from": {
+                  "email": "hello@example.com"
+                },
+                "subject": "<name>, Registration Comlete",
+                "content": [
+                  {
+                    "type": "text/plain",
+                    "value": "Hey <name>, Using Eventbridge Destinations is Fun and easy to do ;)"
+                  }
+                ]
+              }
+
+  SendgridTargetRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: Amazon_EventBridge_Invoke_Sendgrid_API_Destination
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: events:InvokeApiDestination
+                Resource: !GetAtt SendgridApiDestination.Arn
+
+Outputs:
+  WebEndpoint:
+    Description: "API Gateway endpoint URL for Prod stage"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"
