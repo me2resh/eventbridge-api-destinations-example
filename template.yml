@@ -107,7 +107,7 @@ Resources:
                 "from": {
                   "email": "hello@example.com"
                 },
-                "subject": "<name>, Registration Comlete",
+                "subject": "<name>, Registration Complete",
                 "content": [
                   {
                     "type": "text/plain",
